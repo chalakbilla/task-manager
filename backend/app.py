@@ -7,9 +7,10 @@ Auth flow (OAuth 2.0 authorization-code flow, handled server side):
   3. The browser sends that cookie automatically on every /api request (same origin)
 """
 import os
+import traceback
 from datetime import date, datetime, timedelta, timezone
 from functools import wraps
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import jwt
 import requests
@@ -117,18 +118,33 @@ def google_login():
 
 @app.get("/api/auth/google/callback")
 def google_callback():
+    """Finish Google sign-in. Any failure is logged with a traceback (visible in Vercel
+    function logs) and sent back to the login page with a short error code."""
+    try:
+        return _finish_login()
+    except Exception:  # noqa: BLE001
+        print("google_callback crashed:\n" + traceback.format_exc(), flush=True)
+        return redirect("/?error=server_error")
+
+
+def _finish_login():
     if request.args.get("error"):
         return redirect("/?error=access_denied")
+
     try:
         state_signer.loads(request.args.get("state", ""), max_age=600)
     except BadSignature:
-        return jsonify(error="Invalid state"), 400
+        return redirect("/?error=bad_state")
 
-    # 1) code -> tokens
+    code = request.args.get("code")
+    if not code:
+        return redirect("/?error=no_code")
+
+    # 1) authorization code -> tokens
     tok = requests.post(
         TOKEN_URL,
         data={
-            "code": request.args.get("code"),
+            "code": code,
             "client_id": CLIENT_ID,
             "client_secret": CLIENT_SECRET,
             "redirect_uri": REDIRECT_URI,
@@ -137,12 +153,17 @@ def google_callback():
         timeout=10,
     ).json()
     if "access_token" not in tok:
-        return redirect("/?error=token_exchange_failed")
+        # Google says why (e.g. redirect_uri_mismatch). Log the reason, not the secrets.
+        print(f"token exchange failed: {tok.get('error')} - {tok.get('error_description')}", flush=True)
+        return redirect(f"/?error=token_exchange_failed&reason={quote(str(tok.get('error', 'unknown')))}")
 
-    # 2) tokens -> who is this?
+    # 2) access token -> who is this?
     info = requests.get(
         USERINFO_URL, headers={"Authorization": f"Bearer {tok['access_token']}"}, timeout=10
     ).json()
+    if "sub" not in info:
+        print(f"userinfo failed: {info}", flush=True)
+        return redirect("/?error=userinfo_failed")
 
     # 3) create the account on first login, update it on later ones
     row = {
@@ -167,6 +188,22 @@ def google_callback():
         path="/",
     )
     return resp
+
+
+@app.get("/api/diagnose")
+def diagnose():
+    """Temporary setup check. Reports which env vars exist and whether Supabase answers.
+    Never returns secret values. Remove this route before submitting."""
+    names = ["SUPABASE_URL", "SUPABASE_SERVICE_KEY", "GOOGLE_CLIENT_ID",
+             "GOOGLE_CLIENT_SECRET", "GOOGLE_REDIRECT_URI", "JWT_SECRET"]
+    report = {n: bool(os.environ.get(n)) for n in names}
+    report["GOOGLE_REDIRECT_URI_value"] = os.environ.get("GOOGLE_REDIRECT_URI")  # not secret
+    try:
+        supabase.table("users").select("id").limit(1).execute()
+        report["supabase_users_table"] = "ok"
+    except Exception as exc:  # noqa: BLE001
+        report["supabase_users_table"] = f"error: {exc}"
+    return jsonify(report)
 
 
 @app.post("/api/auth/logout")

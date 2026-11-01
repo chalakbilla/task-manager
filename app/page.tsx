@@ -2,6 +2,15 @@
 import { Scissors } from "lucide-react";
 import { useEffect, useState } from "react";
 
+const MESSAGES: Record<string, string> = {
+  access_denied: "Google sign-in was cancelled.",
+  bad_state: "Sign-in expired or was tampered with. Please try again.",
+  no_code: "Google did not return a sign-in code. Please try again.",
+  token_exchange_failed: "Google rejected the sign-in request",
+  userinfo_failed: "Could not read your Google profile. Please try again.",
+  server_error: "Something went wrong on the server while signing you in. Check the Vercel function logs.",
+};
+
 export default function Login() {
   const [error, setError] = useState("");
 
@@ -10,7 +19,13 @@ export default function Login() {
     fetch("/api/me").then((r) => {
       if (r.ok) window.location.href = "/dashboard";
     });
-    if (new URLSearchParams(window.location.search).get("error")) setError("Google sign-in failed. Please try again.");
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get("error");
+    if (code) {
+      const base = MESSAGES[code] ?? "Sign-in failed. Please try again.";
+      const reason = params.get("reason");
+      setError(code === "token_exchange_failed" && reason ? `${base} (${reason}).` : base);
+    }
   }, []);
 
   return (
