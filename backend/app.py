@@ -18,7 +18,7 @@ from flask import Flask, g, jsonify, redirect, request
 from itsdangerous import BadSignature, URLSafeTimedSerializer
 
 from .db import supabase
-from .mailer import send_email
+from .mailer import email_configured, send_email
 
 JWT_SECRET = os.environ["JWT_SECRET"]
 CLIENT_ID = os.environ["GOOGLE_CLIENT_ID"]
@@ -28,7 +28,7 @@ REDIRECT_URI = os.environ["GOOGLE_REDIRECT_URI"]
 AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
 TOKEN_URL = "https://oauth2.googleapis.com/token"
 USERINFO_URL = "https://openidconnect.googleapis.com/v1/userinfo"
-SCOPES = "openid email profile https://www.googleapis.com/auth/gmail.send"
+SCOPES = "openid email profile"  # sign-in only; email goes through EmailJS
 
 COOKIE = "session"
 SESSION_DAYS = 7
@@ -71,7 +71,7 @@ def login_required(fn):
             return jsonify(error="Invalid or expired session"), 401
         res = (
             supabase.table("users")
-            .select("id,name,email,picture,refresh_token")
+            .select("id,name,email,picture")
             .eq("id", claims["sub"])
             .limit(1)
             .execute()
@@ -79,7 +79,6 @@ def login_required(fn):
         if not res.data:
             return jsonify(error="User not found"), 401
         row = res.data[0]
-        g.gmail_connected = bool(row.pop("refresh_token", None))  # never expose the token itself
         g.user = row
         return fn(*args, **kwargs)
 
@@ -109,8 +108,7 @@ def google_login():
         "redirect_uri": REDIRECT_URI,
         "response_type": "code",
         "scope": SCOPES,
-        "access_type": "offline",  # ask for a refresh token (needed to send Gmail later)
-        "prompt": "consent",  # force Google to return the refresh token every login
+        "prompt": "select_account",  # let the user choose which Google account to use
         "state": state_signer.dumps("login"),
     }
     return redirect(f"{AUTH_URL}?{urlencode(params)}")
@@ -172,8 +170,6 @@ def _finish_login():
         "name": info.get("name") or info["email"],
         "picture": info.get("picture"),
     }
-    if tok.get("refresh_token"):
-        row["refresh_token"] = tok["refresh_token"]
     user = supabase.table("users").upsert(row, on_conflict="google_id").execute().data[0]
 
     # 4) our own session: JWT in an HttpOnly cookie (JavaScript can't read it, so XSS can't steal it)
@@ -195,7 +191,8 @@ def diagnose():
     """Temporary setup check. Reports which env vars exist and whether Supabase answers.
     Never returns secret values. Remove this route before submitting."""
     names = ["SUPABASE_URL", "SUPABASE_SERVICE_KEY", "GOOGLE_CLIENT_ID",
-             "GOOGLE_CLIENT_SECRET", "GOOGLE_REDIRECT_URI", "JWT_SECRET"]
+             "GOOGLE_CLIENT_SECRET", "GOOGLE_REDIRECT_URI", "JWT_SECRET",
+             "EMAILJS_SERVICE_ID", "EMAILJS_TEMPLATE_ID", "EMAILJS_PUBLIC_KEY", "EMAILJS_PRIVATE_KEY"]
     report = {n: bool(os.environ.get(n)) for n in names}
     report["GOOGLE_REDIRECT_URI_value"] = os.environ.get("GOOGLE_REDIRECT_URI")  # not secret
     try:
@@ -222,7 +219,7 @@ def health():
 @app.get("/api/me")
 @login_required
 def me():
-    return jsonify({**g.user, "gmail_connected": g.gmail_connected})
+    return jsonify({**g.user, "email_configured": email_configured()})
 
 
 @app.get("/api/users")
@@ -294,12 +291,11 @@ def create_task():
         .data[0]
     )
 
-    # Email the assignee, sent from the creator's Gmail account
-    email_sent = send_email(
-        sender_id=g.user["id"],
+    # Email the assignee through EmailJS
+    email_sent, email_error = send_email(
         to_email=assignee["email"],
         subject=f"New task assigned: {title}",
-        body=(
+        message=(
             f"Hi {assignee['name']},\n\n"
             f"{g.user['name']} assigned you a new task:\n\n"
             f"  {title}\n"
@@ -317,7 +313,7 @@ def create_task():
         events.append(("email", f"Email notification sent to {assignee['name']} for task assignment"))
     log_activity(*events)
 
-    return jsonify(task=fetch_task(created["id"]), email_sent=email_sent), 201
+    return jsonify(task=fetch_task(created["id"]), email_sent=email_sent, email_error=email_error), 201
 
 
 @app.patch("/api/tasks/<task_id>/status")
@@ -339,21 +335,20 @@ def update_status(task_id):
     completed_at = datetime.now(timezone.utc).isoformat() if new_status == "completed" else None
     supabase.table("tasks").update({"status": new_status, "completed_at": completed_at}).eq("id", task_id).execute()
 
-    email_sent = False
+    email_sent, email_error = False, ""
     if new_status == "completed":
-        # Email the creator, sent from the completer's Gmail account
-        email_sent = send_email(
-            sender_id=g.user["id"],
+        # Email the creator through EmailJS
+        email_sent, email_error = send_email(
             to_email=task["creator"]["email"],
             subject=f"Task completed: {task['title']}",
-            body=f"Hi {task['creator']['name']},\n\n{g.user['name']} marked this task as completed:\n\n  {task['title']}\n",
+            message=f"Hi {task['creator']['name']},\n\n{g.user['name']} marked this task as completed:\n\n  {task['title']}\n",
         )
         events = [("completed", f"Task “{task['title']}” marked as completed by {g.user['name']}")]
         if email_sent:
             events.append(("email", f"Email notification sent to {task['creator']['name']} for task completion"))
         log_activity(*events)
 
-    return jsonify(task=fetch_task(task_id), email_sent=email_sent)
+    return jsonify(task=fetch_task(task_id), email_sent=email_sent, email_error=email_error)
 
 
 if __name__ == "__main__":

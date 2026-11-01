@@ -38,7 +38,7 @@ export default function Dashboard() {
   const notify = useCallback((msg: string) => {
     setToast(msg);
     clearTimeout(toastTimer.current);
-    toastTimer.current = setTimeout(() => setToast(""), 3500);
+    toastTimer.current = setTimeout(() => setToast(""), 8000);
   }, []);
 
   const refresh = useCallback(async () => {
@@ -59,12 +59,12 @@ export default function Dashboard() {
 
   async function createTask(form: NewTask) {
     try {
-      const res = await api<{ task: Task; email_sent: boolean }>("/api/tasks", {
+      const res = await api<{ task: Task; email_sent: boolean; email_error?: string }>("/api/tasks", {
         method: "POST",
         body: JSON.stringify({ ...form, due_date: form.due_date || null }),
       });
       setShowModal(false);
-      notify(res.email_sent ? "Task created and email sent." : "Task created (email could not be sent).");
+      notify(res.email_sent ? "Task created and email sent." : `Task created. Email not sent: ${res.email_error || "unknown reason"}`);
       await refresh();
     } catch (e) {
       notify((e as Error).message);
@@ -73,11 +73,11 @@ export default function Dashboard() {
 
   async function changeStatus(t: Task, s: Status) {
     try {
-      const res = await api<{ email_sent: boolean }>(`/api/tasks/${t.id}/status`, {
+      const res = await api<{ email_sent: boolean; email_error?: string }>(`/api/tasks/${t.id}/status`, {
         method: "PATCH",
         body: JSON.stringify({ status: s }),
       });
-      notify(s === "completed" ? (res.email_sent ? "Task completed. Creator notified by email." : "Task completed.") : "Task updated.");
+      notify(s === "completed" ? (res.email_sent ? "Task completed. Creator notified by email." : res.email_error ? `Task completed. Email not sent: ${res.email_error}` : "Task completed.") : "Task updated.");
       await refresh();
     } catch (e) {
       notify((e as Error).message);
@@ -163,7 +163,7 @@ export default function Dashboard() {
           <aside className="right">
             <TeamPanel users={users} me={me} />
             <ActivityPanel items={activity} />
-            <IntegrationsPanel gmailConnected={!!me.gmail_connected} />
+            <IntegrationsPanel emailConnected={!!me.email_configured} />
           </aside>
         </div>
       </div>

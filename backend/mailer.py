@@ -1,54 +1,50 @@
-"""Send email through the Gmail API using the acting user's own Google account."""
-import base64
+"""Send notification emails through EmailJS (REST API). All keys come from environment variables."""
 import os
-from email.mime.text import MIMEText
 
 import requests
 
-from .db import supabase
-
-TOKEN_URL = "https://oauth2.googleapis.com/token"
-SEND_URL = "https://gmail.googleapis.com/gmail/v1/users/me/messages/send"
+EMAILJS_URL = "https://api.emailjs.com/api/v1.0/email/send"
+NEEDED = ("EMAILJS_SERVICE_ID", "EMAILJS_TEMPLATE_ID", "EMAILJS_PUBLIC_KEY", "EMAILJS_PRIVATE_KEY")
 
 
-def _access_token(refresh_token: str) -> str:
-    """Access tokens last ~1h, so we trade the stored refresh token for a fresh one."""
-    r = requests.post(
-        TOKEN_URL,
-        data={
-            "client_id": os.environ["GOOGLE_CLIENT_ID"],
-            "client_secret": os.environ["GOOGLE_CLIENT_SECRET"],
-            "refresh_token": refresh_token,
-            "grant_type": "refresh_token",
-        },
-        timeout=10,
-    )
-    r.raise_for_status()
-    return r.json()["access_token"]
+def email_configured() -> bool:
+    """True when all four EmailJS variables are set (used by /api/me and the Integrations card)."""
+    return all(os.environ.get(name, "").strip() for name in NEEDED)
 
 
-def send_email(sender_id: str, to_email: str, subject: str, body: str) -> bool:
-    """Send `body` from the Gmail account of user `sender_id`. Returns True on success.
+def send_email(to_email: str, subject: str, message: str) -> tuple[bool, str]:
+    """Send one email via the EmailJS template (variables: to_email, subject, message).
 
+    Returns (sent, reason). `reason` is "" on success, otherwise a message safe to show the user.
     Never raises: a mail failure must not make task creation/completion fail.
     """
+    if not email_configured():
+        print("mailer: EMAILJS_* variables are missing", flush=True)
+        return False, "EmailJS is not configured on the server (missing EMAILJS_* variables)."
+
     try:
-        res = supabase.table("users").select("email,refresh_token").eq("id", sender_id).limit(1).execute()
-        if not res.data or not res.data[0].get("refresh_token"):
-            print("mailer: sender has no refresh token")
-            return False
-        sender = res.data[0]
+        resp = requests.post(
+            EMAILJS_URL,
+            json={
+                "service_id": os.environ["EMAILJS_SERVICE_ID"].strip(),
+                "template_id": os.environ["EMAILJS_TEMPLATE_ID"].strip(),
+                "user_id": os.environ["EMAILJS_PUBLIC_KEY"].strip(),  # EmailJS calls the public key "user_id"
+                "accessToken": os.environ["EMAILJS_PRIVATE_KEY"].strip(),  # server-side calls need the private key
+                "template_params": {"to_email": to_email, "subject": subject, "message": message},
+            },
+            timeout=10,
+        )
+        if resp.ok:
+            return True, ""
 
-        msg = MIMEText(body)
-        msg["To"] = to_email
-        msg["From"] = sender["email"]
-        msg["Subject"] = subject
-        raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()  # Gmail wants base64url
-
-        token = _access_token(sender["refresh_token"])
-        r = requests.post(SEND_URL, headers={"Authorization": f"Bearer {token}"}, json={"raw": raw}, timeout=10)
-        r.raise_for_status()
-        return True
+        print(f"mailer: EmailJS error {resp.status_code}: {resp.text}", flush=True)
+        if "non-browser" in resp.text.lower():
+            return False, (
+                "EmailJS blocks server calls. In EmailJS go to Account > Security and turn on "
+                "'Allow EmailJS API for non-browser applications'."
+            )
+        # EmailJS answers with a short plain-text reason (e.g. "The Public Key is invalid")
+        return False, f"EmailJS error {resp.status_code}: {resp.text[:120]}"
     except Exception as exc:  # noqa: BLE001
-        print(f"mailer: failed to send email: {exc}")
-        return False
+        print(f"mailer: unexpected error: {exc}", flush=True)
+        return False, "Could not reach EmailJS. Check the server logs."

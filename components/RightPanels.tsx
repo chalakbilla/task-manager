@@ -47,12 +47,12 @@ export function ActivityPanel({ items }: { items: Activity[] }) {
   );
 }
 
-export function IntegrationsPanel({ gmailConnected }: { gmailConnected: boolean }) {
+export function IntegrationsPanel({ emailConnected }: { emailConnected: boolean }) {
   return (
     <div className="card">
       <div className="row">
         <h3><Zap size={16} /> Integrations</h3>
-        {gmailConnected && <span className="pill st-completed"><Check size={11} /> Connected</span>}
+        {emailConnected && <span className="pill st-completed"><Check size={11} /> Connected</span>}
       </div>
       <div className="integration">
         <span className="g big">G</span>
@@ -61,11 +61,11 @@ export function IntegrationsPanel({ gmailConnected }: { gmailConnected: boolean 
       </div>
       <div className="integration">
         <span className="gmail"><Mail size={20} /></span>
-        <div><b>Gmail</b><div className="muted">Task Notifications (Create &amp; Complete)</div></div>
-        {gmailConnected ? (
+        <div><b>EmailJS</b><div className="muted">Task Notifications (Create &amp; Complete)</div></div>
+        {emailConnected ? (
           <span className="ok"><Check size={14} /></span>
         ) : (
-          <a className="link" href="/api/auth/google/login">Reconnect</a>
+          <span className="pill st-overdue">Not set up</span>
         )}
       </div>
     </div>

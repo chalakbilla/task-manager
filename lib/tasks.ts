@@ -8,7 +8,7 @@ export type Person = {
   name: string;
   email: string;
   picture: string | null;
-  gmail_connected?: boolean;
+  email_configured?: boolean;
 };
 
 export type Brief = { name: string; email: string; picture: string | null };

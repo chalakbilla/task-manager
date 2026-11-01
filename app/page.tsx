@@ -33,7 +33,7 @@ export default function Login() {
       <div className="login-card">
         <div className="logo big"><Scissors size={28} /></div>
         <h1>TaskFlow</h1>
-        <p className="muted">Create tasks, assign them to your team and get notified by Gmail.</p>
+        <p className="muted">Create tasks, assign them to your team and get notified by email.</p>
         {error && <p className="error">{error}</p>}
         {/* Plain link: the Flask backend starts the OAuth redirect */}
         <a className="btn google" href="/api/auth/google/login">
