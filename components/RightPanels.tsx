@@ -61,7 +61,7 @@ export function IntegrationsPanel({ emailConnected }: { emailConnected: boolean 
       </div>
       <div className="integration">
         <span className="gmail"><Mail size={20} /></span>
-        <div><b>EmailJS</b><div className="muted">Task Notifications (Create &amp; Complete)</div></div>
+        <div><b>EmailJS</b><div className="muted">Task Notifications (Create, Start &amp; Complete)</div></div>
         {emailConnected ? (
           <span className="ok"><Check size={14} /></span>
         ) : (

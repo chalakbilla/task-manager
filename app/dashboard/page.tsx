@@ -77,7 +77,13 @@ export default function Dashboard() {
         method: "PATCH",
         body: JSON.stringify({ status: s }),
       });
-      notify(s === "completed" ? (res.email_sent ? "Task completed. Creator notified by email." : res.email_error ? `Task completed. Email not sent: ${res.email_error}` : "Task completed.") : "Task updated.");
+      if (s === "in_progress") {
+        notify(res.email_sent ? "Task started. Notification email sent." : res.email_error ? `Task started. Email not sent: ${res.email_error}` : "Task started.");
+      } else if (s === "completed") {
+        notify(res.email_sent ? "Task completed. Notification email sent." : res.email_error ? `Task completed. Email not sent: ${res.email_error}` : "Task completed.");
+      } else {
+        notify("Task moved to pending.");
+      }
       await refresh();
     } catch (e) {
       notify((e as Error).message);

@@ -336,16 +336,37 @@ def update_status(task_id):
     supabase.table("tasks").update({"status": new_status, "completed_at": completed_at}).eq("id", task_id).execute()
 
     email_sent, email_error = False, ""
-    if new_status == "completed":
-        # Email the creator through EmailJS
+    if new_status == "in_progress":
+        # Email notification when a task is started (In Progress)
+        recipient = task["creator"] if g.user["id"] != task["created_by"] else task["assignee"]
         email_sent, email_error = send_email(
-            to_email=task["creator"]["email"],
+            to_email=recipient["email"],
+            subject=f"Task started: {task['title']}",
+            message=(
+                f"Hi {recipient['name']},\n\n"
+                f"{g.user['name']} has started working on this task:\n\n"
+                f"  {task['title']}\n"
+                f"  Priority: {task.get('priority', 'medium')}\n"
+                f"  Status: In Progress\n\n"
+                f"Open TaskFlow to view progress."
+            ),
+        )
+        events = [("assigned", f"Task “{task['title']}” started (In Progress) by {g.user['name']}")]
+        if email_sent:
+            events.append(("email", f"Email notification sent to {recipient['name']} for task start"))
+        log_activity(*events)
+
+    elif new_status == "completed":
+        # Email notification when a task is completed
+        recipient = task["creator"] if g.user["id"] != task["created_by"] else task["assignee"]
+        email_sent, email_error = send_email(
+            to_email=recipient["email"],
             subject=f"Task completed: {task['title']}",
-            message=f"Hi {task['creator']['name']},\n\n{g.user['name']} marked this task as completed:\n\n  {task['title']}\n",
+            message=f"Hi {recipient['name']},\n\n{g.user['name']} marked this task as completed:\n\n  {task['title']}\n",
         )
         events = [("completed", f"Task “{task['title']}” marked as completed by {g.user['name']}")]
         if email_sent:
-            events.append(("email", f"Email notification sent to {task['creator']['name']} for task completion"))
+            events.append(("email", f"Email notification sent to {recipient['name']} for task completion"))
         log_activity(*events)
 
     return jsonify(task=fetch_task(task_id), email_sent=email_sent, email_error=email_error)
